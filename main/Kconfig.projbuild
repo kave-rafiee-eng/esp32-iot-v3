@@ -1,0 +1,25 @@
+menu "Example Configuration"
+
+    config BROKER_URL
+        string "Broker URL"
+        default "mqtt://mqtt.eclipseprojects.io"
+        help
+            URL of the broker to connect to
+
+    config BROKER_URL_FROM_STDIN
+        bool
+        default y if BROKER_URL = "FROM_STDIN"
+
+    config PCG_UART_TX_PIN
+        int "PCG UART TX GPIO"
+        default 17
+        help
+            GPIO number for UART2 TX used by pcgtask.
+
+    config PCG_UART_RX_PIN
+        int "PCG UART RX GPIO"
+        default 16
+        help
+            GPIO number for UART2 RX used by pcgtask.
+
+endmenu
