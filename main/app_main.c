@@ -6,7 +6,7 @@
    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
    CONDITIONS OF ANY KIND, either express or implied.
 */
-
+#include "pcg_rtr.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -139,9 +139,23 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    ESP_ERROR_CHECK(example_connect());
-    ESP_ERROR_CHECK(mqtt_data_queue_init());
+    esp_err_t err = pcg_uart_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "UART init failed: %s", esp_err_to_name(err));
+    }
+    else{
+        uint16_t value = 0;
+        if( rtrReadRegister(10100, &value, 0) == true ){
+            ESP_LOGE(TAG,"serial : %d",value);
+        }
+        else{
+            ESP_LOGE(TAG,"faild read serial : %d",value);
+        }
+        
+    }
+    //ESP_ERROR_CHECK(example_connect());
+    //ESP_ERROR_CHECK(mqtt_data_queue_init());
 
-    esp_mqtt_client_handle_t client = mqtt_app_start();
-    ESP_ERROR_CHECK(pcgtask_start(client));
+    //esp_mqtt_client_handle_t client = mqtt_app_start();
+    // ESP_ERROR_CHECK(pcgtask_start(client));
 }

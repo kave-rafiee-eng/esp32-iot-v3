@@ -22,4 +22,10 @@ menu "Example Configuration"
         help
             GPIO number for UART2 RX used by pcgtask.
 
+    config GPIO_OUTPUT_PIN
+        int "GPIO output pin"
+        default 4
+        help
+            GPIO number used as digital output (sample: LED or relay).
+
 endmenu

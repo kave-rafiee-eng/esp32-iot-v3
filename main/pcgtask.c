@@ -8,74 +8,48 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "gpio_output.h"
 #include "mqtt_data.h"
+#include "pcg_rtr.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "pcgtask";
+#define PCG_QUEUE_WAIT_MS 50
 
-#define PCG_UART_NUM           UART_NUM_2
-#define PCG_UART_BAUD_RATE     9600
-#define PCG_UART_TX_BUF_SIZE   256
-#define PCG_UART_RX_BUF_SIZE   256
-#define PCG_UART_RX_READ_SIZE  128
-#define PCG_QUEUE_WAIT_MS      50
 
-static esp_err_t pcg_uart_init(void)
-{
-    uart_config_t uart_config = {
-        .baud_rate = PCG_UART_BAUD_RATE,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
-
-    esp_err_t err = uart_driver_install(PCG_UART_NUM, PCG_UART_RX_BUF_SIZE, PCG_UART_TX_BUF_SIZE, 0, NULL, 0);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    err = uart_param_config(PCG_UART_NUM, &uart_config);
-    if (err != ESP_OK) {
-        uart_driver_delete(PCG_UART_NUM);
-        return err;
-    }
-
-    err = uart_set_pin(PCG_UART_NUM, CONFIG_PCG_UART_TX_PIN, CONFIG_PCG_UART_RX_PIN,
-                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    if (err != ESP_OK) {
-        uart_driver_delete(PCG_UART_NUM);
-        return err;
-    }
-
-    ESP_LOGI(TAG, "UART%d init OK, baud=%d, TX=GPIO%d, RX=GPIO%d",
-             PCG_UART_NUM, PCG_UART_BAUD_RATE, CONFIG_PCG_UART_TX_PIN, CONFIG_PCG_UART_RX_PIN);
-    return ESP_OK;
-}
 
 static void pcg_uart_write_message(const mqtt_data_msg_t *msg)
 {
-    if (msg == NULL || msg->data_len <= 0) {
-        return;
-    }
+    // if (msg == NULL || msg->data_len <= 0) {
+    //     return;
+    // }
 
-    uart_write_bytes(PCG_UART_NUM, msg->data, msg->data_len);
-    uart_write_bytes(PCG_UART_NUM, "\r\n", 2);
+    // uart_write_bytes(PCG_UART_NUM, msg->data, msg->data_len);
+    // uart_write_bytes(PCG_UART_NUM, "\r\n", 2);
+}
+
+/* Sample: write GPIO output HIGH / LOW / toggle. */
+static void pcg_gpio_write_sample(void)
+{
+    gpio_output_set(1);   /* GPIO4 = HIGH (3.3V) */
+    vTaskDelay(pdMS_TO_TICKS(500));
+    gpio_output_set(0);   /* GPIO4 = LOW  (0V)   */
+    vTaskDelay(pdMS_TO_TICKS(500));
+    gpio_output_toggle(); /* flip current level */
 }
 
 /* Sample: read whatever arrived on UART2 (Serial 2) and log it. */
 static void pcg_uart_read_sample(void)
 {
-    uint8_t data[PCG_UART_RX_READ_SIZE];
-    int len = uart_read_bytes(PCG_UART_NUM, data, sizeof(data) - 1, 0);
-    if (len <= 0) {
-        return;
-    }
+    // uint8_t data[PCG_UART_RX_READ_SIZE];
+    // int len = uart_read_bytes(PCG_UART_NUM, data, sizeof(data) - 1, 0);
+    // if (len <= 0) {
+    //     return;
+    // }
 
-    data[len] = '\0';
-    ESP_LOGI(TAG, "UART2 RX (%d bytes): %.*s", len, len, (char *)data);
-    ESP_LOG_BUFFER_HEXDUMP(TAG, data, len, ESP_LOG_DEBUG);
+    // data[len] = '\0';
+    // ESP_LOGI(TAG, "UART2 RX (%d bytes): %.*s", len, len, (char *)data);
+    // ESP_LOG_BUFFER_HEXDUMP(TAG, data, len, ESP_LOG_DEBUG);
 }
 
 static void pcgtask(void *arg)
@@ -97,6 +71,7 @@ static void pcgtask(void *arg)
             ESP_LOGI(TAG, "TOPIC=%.*s", msg.topic_len, msg.topic);
             ESP_LOGI(TAG, "DATA=%.*s", msg.data_len, msg.data);
             pcg_uart_write_message(&msg);
+            gpio_output_toggle();
         }
 
         pcg_uart_read_sample();
@@ -108,7 +83,13 @@ static void pcgtask(void *arg)
 
 esp_err_t pcgtask_start(esp_mqtt_client_handle_t client)
 {
-    esp_err_t err = pcg_uart_init();
+    esp_err_t err = gpio_output_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "GPIO init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = pcg_uart_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "UART init failed: %s", esp_err_to_name(err));
         return err;
