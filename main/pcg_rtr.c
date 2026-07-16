@@ -6,7 +6,6 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "gpio_output.h"
 #include "sdkconfig.h"
 
 typedef enum {
@@ -38,16 +37,11 @@ typedef enum {
     RTR_PARSE_ERR_ADDRESS,
 } rtr_parse_result_t;
 
-#define PCG_UART_NUM              UART_NUM_2
-#define PCG_UART_BAUD_RATE        38400
-#define PCG_UART_TX_BUF_SIZE      256
-#define PCG_UART_RX_BUF_SIZE      256
-#define PCG_UART_RX_READ_SIZE     128
+
 
 #define RTR_POLL_INTERVAL_MS      10
 #define RTR_RESEND_INTERVAL_MS    1000
-#define RTR_RS485_TX_DONE_MS      100
-#define RTR_RS485_TURNAROUND_MS   2
+#define RTR_UART_RX_TOUT_SYMBOLS  3
 
 #define CRC_SIZE                  2
 #define PCG_HEADER_SIZE           3   /* sender_id, receiver_id, port */
@@ -164,7 +158,7 @@ static rtr_parse_result_t rtr_parse_read_response(const uint8_t *data, size_t le
     return RTR_PARSE_OK;
 }
 
-static void rtr_uart_flush_rx(void)
+void rtr_uart_flush_rx(void)
 {
     uint8_t discard[PCG_UART_RX_READ_SIZE];
     int flushed = 0;
@@ -182,31 +176,25 @@ static void rtr_uart_flush_rx(void)
     }
 }
 
-static esp_err_t rtr_rs485_send(const uint8_t *data, size_t len)
+esp_err_t rtr_rs485_send(const uint8_t *data, size_t len)
 {
     if (data == NULL || len == 0) {
         ESP_LOGE(TAG, "RS485 send: invalid buffer");
         return ESP_ERR_INVALID_ARG;
     }
 
-    gpio_output_set(1);
-
     int written = uart_write_bytes(PCG_UART_NUM, data, len);
     if (written < 0 || (size_t)written != len) {
-        gpio_output_set(0);
         ESP_LOGE(TAG, "RS485 send failed, written=%d, expected=%u", written, (unsigned)len);
         return ESP_FAIL;
     }
 
-    esp_err_t err = uart_wait_tx_done(PCG_UART_NUM, pdMS_TO_TICKS(RTR_RS485_TX_DONE_MS));
+    esp_err_t err = uart_wait_tx_done(PCG_UART_NUM, portMAX_DELAY);
     if (err != ESP_OK) {
-        gpio_output_set(0);
         ESP_LOGE(TAG, "RS485 wait TX done failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(RTR_RS485_TURNAROUND_MS));
-    gpio_output_set(0);
     return ESP_OK;
 }
 
@@ -271,12 +259,6 @@ bool rtrReadRegister(uint16_t add, uint16_t *value, uint32_t timeout_ms)
 
 esp_err_t pcg_uart_init(void)
 {
-    esp_err_t err = gpio_output_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "GPIO output init failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
     uart_config_t uart_config = {
         .baud_rate = PCG_UART_BAUD_RATE,
         .data_bits = UART_DATA_8_BITS,
@@ -286,7 +268,7 @@ esp_err_t pcg_uart_init(void)
         .source_clk = UART_SCLK_DEFAULT,
     };
 
-    err = uart_driver_install(PCG_UART_NUM, PCG_UART_RX_BUF_SIZE, PCG_UART_TX_BUF_SIZE, 0, NULL, 0);
+    esp_err_t err = uart_driver_install(PCG_UART_NUM, PCG_UART_RX_BUF_SIZE, PCG_UART_TX_BUF_SIZE, 0, NULL, 0);
     if (err != ESP_OK) {
         return err;
     }
@@ -298,13 +280,25 @@ esp_err_t pcg_uart_init(void)
     }
 
     err = uart_set_pin(PCG_UART_NUM, CONFIG_PCG_UART_TX_PIN, CONFIG_PCG_UART_RX_PIN,
-                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+                       CONFIG_GPIO_OUTPUT_PIN, UART_PIN_NO_CHANGE);
     if (err != ESP_OK) {
         uart_driver_delete(PCG_UART_NUM);
         return err;
     }
 
-    ESP_LOGI(TAG, "UART%d init OK (RS485), baud=%d, TX=GPIO%d, RX=GPIO%d, DE/RE=GPIO%d",
+    err = uart_set_mode(PCG_UART_NUM, UART_MODE_RS485_HALF_DUPLEX);
+    if (err != ESP_OK) {
+        uart_driver_delete(PCG_UART_NUM);
+        return err;
+    }
+
+    err = uart_set_rx_timeout(PCG_UART_NUM, RTR_UART_RX_TOUT_SYMBOLS);
+    if (err != ESP_OK) {
+        uart_driver_delete(PCG_UART_NUM);
+        return err;
+    }
+
+    ESP_LOGI(TAG, "UART%d init OK (RS485 half-duplex), baud=%d, TX=GPIO%d, RX=GPIO%d, DE/RE(RTS)=GPIO%d",
              PCG_UART_NUM, PCG_UART_BAUD_RATE, CONFIG_PCG_UART_TX_PIN, CONFIG_PCG_UART_RX_PIN,
              CONFIG_GPIO_OUTPUT_PIN);
     return ESP_OK;

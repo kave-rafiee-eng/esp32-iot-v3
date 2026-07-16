@@ -23,9 +23,10 @@ menu "Example Configuration"
             GPIO number for UART2 RX used by pcgtask.
 
     config GPIO_OUTPUT_PIN
-        int "GPIO output pin"
+        int "RS485 DE/RE GPIO (UART RTS)"
         default 4
         help
-            GPIO number used as digital output (sample: LED or relay).
+            GPIO number connected to RS485 transceiver DE/~RE pin.
+            Used as UART RTS in half-duplex RS485 mode.
 
 endmenu

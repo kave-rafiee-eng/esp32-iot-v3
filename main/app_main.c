@@ -33,6 +33,7 @@
 #include "mqtt_data.h"
 #include "pcgtask.h"
 
+
 static const char *TAG = "mqtt_example";
 
 static void log_error_if_nonzero(const char *message, int error_code)
@@ -52,6 +53,9 @@ static void log_error_if_nonzero(const char *message, int error_code)
  * @param event_id The id for the received event.
  * @param event_data The data for the event, esp_mqtt_event_handle_t.
  */
+
+uint16_t deviceSerial = 0;
+
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
     ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%" PRIi32 "", base, event_id);
@@ -61,17 +65,22 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-        msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
+
+        char topic[64];
+        snprintf(topic, sizeof(topic), "%d/connect", deviceSerial);
+
+        msg_id = esp_mqtt_client_publish(client, topic, "connected.", 0, 1, 0);
         ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
 
-        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
+        snprintf(topic, sizeof(topic), "%d/pub", deviceSerial);
+        msg_id = esp_mqtt_client_subscribe(client, topic, 0);
         ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
 
-        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
-        ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+        // msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
+        // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
 
-        msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
-        ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
+        // msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
+        // ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
         break;
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
@@ -79,8 +88,8 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
     case MQTT_EVENT_SUBSCRIBED:
         ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-        msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
-        ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
+        // msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
+        // ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
         break;
     case MQTT_EVENT_UNSUBSCRIBED:
         ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
@@ -144,18 +153,14 @@ void app_main(void)
         ESP_LOGE(TAG, "UART init failed: %s", esp_err_to_name(err));
     }
     else{
-        uint16_t value = 0;
-        if( rtrReadRegister(10100, &value, 0) == true ){
-            ESP_LOGE(TAG,"serial : %d",value);
-        }
-        else{
-            ESP_LOGE(TAG,"faild read serial : %d",value);
+        if( rtrReadRegister(10100, &deviceSerial, 0) == true ){
+            ESP_LOGE(TAG,"serial : %d",deviceSerial);
         }
         
     }
-    //ESP_ERROR_CHECK(example_connect());
-    //ESP_ERROR_CHECK(mqtt_data_queue_init());
+    ESP_ERROR_CHECK(example_connect());
+    ESP_ERROR_CHECK(mqtt_data_queue_init());
 
-    //esp_mqtt_client_handle_t client = mqtt_app_start();
-    // ESP_ERROR_CHECK(pcgtask_start(client));
+    esp_mqtt_client_handle_t client = mqtt_app_start();
+    ESP_ERROR_CHECK(pcgtask_start(client));
 }
