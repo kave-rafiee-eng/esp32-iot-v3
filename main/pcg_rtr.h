@@ -6,7 +6,7 @@
 #include "esp_err.h"
 
 #define PCG_UART_NUM              UART_NUM_2
-#define PCG_UART_BAUD_RATE        9600
+#define PCG_UART_BAUD_RATE        38400
 #define PCG_UART_TX_BUF_SIZE      0
 #define PCG_UART_RX_BUF_SIZE      256
 #define PCG_UART_RX_READ_SIZE     128
