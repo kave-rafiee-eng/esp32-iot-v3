@@ -12,6 +12,7 @@
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "pcg_rtr.h"
+#include "pcg_uart.h"
 #include "protocol_examples_common.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -34,6 +35,8 @@
 #include "pcgtask.h"
 
 #include "sdkconfig.h"
+
+#include "pcg_device.h"
 
 static const char *TAG = "mqtt_example";
 
@@ -158,9 +161,8 @@ void app_main(void) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "UART init failed: %s", esp_err_to_name(err));
   } else {
-    if (rtrReadRegister(10100, &deviceSerial, 0) == true) {
-      ESP_LOGE(TAG, "serial : %d", deviceSerial);
-    }
+    deviceSerial = pcg_read_serial_device();
+    ESP_LOGE(TAG, "Device Serial: %d", deviceSerial);
   }
   ESP_ERROR_CHECK(example_connect());
   ESP_ERROR_CHECK(mqtt_data_queue_init());
