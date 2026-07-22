@@ -5,10 +5,43 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "mqtt_data.h"
 #include "pcg_protocol.h"
 #include "pcg_uart.h"
 
 static const char *TAG = "pcg_device";
+
+#define PCG_MQTT_RS485_DELAY_MS 20
+
+pcg_process_result_t pcg_device_handle(const pcg_device_frame_t *frame,
+                                         const pcg_process_ctx_t *ctx) {
+  if (frame == NULL || ctx == NULL) {
+    return PCG_PROCESS_ERR_NULL;
+  }
+
+  ESP_LOGI(TAG, "device id=0x%04X request=%u", frame->device_id,
+           frame->request);
+
+  if (frame->request != PCG_DEVICE_REQUEST_SYNC || ctx->mqtt_queue == NULL) {
+    return PCG_PROCESS_OK;
+  }
+
+  mqtt_data_msg_t msg;
+  if (xQueueReceive(ctx->mqtt_queue, &msg, 0) != pdTRUE) {
+    return PCG_PROCESS_OK;
+  }
+
+  vTaskDelay(pdMS_TO_TICKS(PCG_MQTT_RS485_DELAY_MS));
+  pcg_uart_flush_rx();
+  if (pcg_rs485_send((const uint8_t *)msg.data, (size_t)msg.data_len) !=
+      ESP_OK) {
+    ESP_LOGE(TAG, "RS485 send failed after sync request");
+    return PCG_PROCESS_ERR_NULL;
+  }
+
+  ESP_LOGI(TAG, "sent queued mqtt data to RS485, len=%d", msg.data_len);
+  return PCG_PROCESS_OK;
+}
 
 static bool pcg_device_frame_matches(const uint8_t *frame) {
   return frame[PCG_OFF_SENDER_ID] == PCG_ADDR_ADVANCE &&

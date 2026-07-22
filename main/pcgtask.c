@@ -33,8 +33,14 @@ static void pcgtask(void *arg) {
     int len = uart_read_bytes(PCG_UART_NUM, rx_buf, sizeof(rx_buf), 0);
 
     if (len > 0) {
-      ESP_LOGI(TAG, "RS485 data received, len=%d", len);
-      pcg_process(rx_buf, (size_t)len, client, deviceSerial, data_queue);
+      pcg_process_ctx_t ctx = {
+          .mqtt_client = client,
+          .device_serial = deviceSerial,
+          .mqtt_queue = data_queue,
+      };
+
+      // ESP_LOGI(TAG, "RS485 data received, len=%d", len);
+      pcg_process(rx_buf, (size_t)len, &ctx);
     }
 
     vTaskDelay(1);

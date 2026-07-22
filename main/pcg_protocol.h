@@ -72,7 +72,6 @@ typedef enum {
 #define PCG_MIN_FRAME_SIZE (PCG_HEADER_SIZE + PCG_CRC_SIZE)
 
 #define PCG_DEVICE_REQUEST_SYNC 1
-#define PCG_MQTT_RS485_DELAY_MS 20
 
 #define PCG_DEVICE_POLL_MS 10
 
@@ -87,10 +86,19 @@ typedef enum {
   PCG_PROCESS_IGNORED,
 } pcg_process_result_t;
 
+typedef struct {
+  esp_mqtt_client_handle_t mqtt_client;
+  uint16_t device_serial;
+  QueueHandle_t mqtt_queue;
+} pcg_process_ctx_t;
+
+typedef struct {
+  uint16_t device_id;
+  uint8_t request;
+} pcg_device_frame_t;
+
 uint16_t pcg_crc16(const uint8_t *buf, size_t len);
 bool pcg_check_crc(const uint8_t *data, size_t data_len, const char *log_tag);
 
 pcg_process_result_t pcg_process(const uint8_t *data, size_t len,
-                                 esp_mqtt_client_handle_t mqtt_client,
-                                 uint16_t device_serial,
-                                 QueueHandle_t mqtt_queue);
+                                 const pcg_process_ctx_t *ctx);

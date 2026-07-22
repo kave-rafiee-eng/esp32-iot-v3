@@ -1,13 +1,9 @@
 #include "pcg_protocol.h"
 
-#include <stdio.h>
-
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
-#include "mqtt_data.h"
-#include "pcg_uart.h"
+#include "pcg_client.h"
+#include "pcg_device.h"
 
 static const char *TAG = "pcg_protocol";
 
@@ -51,10 +47,8 @@ bool pcg_check_crc(const uint8_t *data, size_t data_len, const char *log_tag) {
 }
 
 pcg_process_result_t pcg_process(const uint8_t *data, size_t len,
-                                 esp_mqtt_client_handle_t mqtt_client,
-                                 uint16_t device_serial,
-                                 QueueHandle_t mqtt_queue) {
-  if (data == NULL) {
+                                 const pcg_process_ctx_t *ctx) {
+  if (data == NULL || ctx == NULL) {
     return PCG_PROCESS_ERR_NULL;
   }
 
@@ -75,51 +69,37 @@ pcg_process_result_t pcg_process(const uint8_t *data, size_t len,
   }
 
   uint8_t receiver_id = data[PCG_OFF_RECEIVER_ID];
-  if (receiver_id == PCG_ADDR_ESP32) {
-    uint8_t port = data[PCG_OFF_PORT];
+  pcg_port_t port = (pcg_port_t)data[PCG_OFF_PORT];
 
-    if (port != PCG_PORT_DEVICE) {
-      ESP_LOGW(TAG, "port mismatch for ESP32, got %u", port);
+  switch (receiver_id) {
+  case PCG_ADDR_ESP32:
+    switch (port) {
+    case PCG_PORT_DEVICE: {
+      if (len < PCG_DEVICE_MIN_FRAME_SIZE) {
+        ESP_LOGW(TAG, "device frame too short, len=%u", (unsigned)len);
+        return PCG_PROCESS_ERR_TOO_SHORT;
+      }
+
+      pcg_device_frame_t frame = {
+          .device_id = (uint16_t)((data[PCG_OFF_DEVICE_ID_HI] << 8) |
+                                  data[PCG_OFF_DEVICE_ID_LO]),
+          .request = data[PCG_OFF_DEVICE_REQUEST],
+      };
+      return pcg_device_handle(&frame, ctx);
+    }
+    case PCG_PORT_RTR:
+      ESP_LOGW(TAG, "RTR port handler not implemented");
+      return PCG_PROCESS_IGNORED;
+    default:
+      ESP_LOGW(TAG, "unknown port %u for ESP32", port);
       return PCG_PROCESS_ERR_PORT;
     }
 
-    if (len < PCG_DEVICE_MIN_FRAME_SIZE) {
-      ESP_LOGW(TAG, "device frame too short, len=%u", (unsigned)len);
-      return PCG_PROCESS_ERR_TOO_SHORT;
-    }
+  case PCG_ADDR_CLIENT:
+    return pcg_client_handle(port, data, len, ctx);
 
-    uint8_t request = data[PCG_OFF_DEVICE_REQUEST];
-    if (request == PCG_DEVICE_REQUEST_SYNC && mqtt_queue != NULL) {
-      mqtt_data_msg_t msg;
-      if (xQueueReceive(mqtt_queue, &msg, 0) == pdTRUE) {
-        vTaskDelay(pdMS_TO_TICKS(PCG_MQTT_RS485_DELAY_MS));
-        pcg_uart_flush_rx();
-        if (pcg_rs485_send((const uint8_t *)msg.data, (size_t)msg.data_len) !=
-            ESP_OK) {
-          ESP_LOGE(TAG, "RS485 send failed after sync request");
-        } else {
-          ESP_LOGI(TAG, "sent queued mqtt data to RS485, len=%d", msg.data_len);
-        }
-      }
-    }
-
-    return PCG_PROCESS_OK;
+  default:
+    ESP_LOGW(TAG, "receiver ID mismatch, got %u", receiver_id);
+    return PCG_PROCESS_ERR_RECEIVER_ID;
   }
-
-  if (receiver_id == PCG_ADDR_CLIENT) {
-    if (mqtt_client == NULL) {
-      return PCG_PROCESS_ERR_NULL;
-    }
-
-    char topic[64];
-    snprintf(topic, sizeof(topic), "%u/sub", device_serial);
-    esp_mqtt_client_publish(mqtt_client, topic, (const char *)data, (int)len, 1,
-                            0);
-    ESP_LOGI(TAG, "published RS485 data to MQTT topic=%s len=%u", topic,
-             (unsigned)len);
-    return PCG_PROCESS_OK;
-  }
-
-  ESP_LOGW(TAG, "receiver ID mismatch, got %u", receiver_id);
-  return PCG_PROCESS_ERR_RECEIVER_ID;
 }

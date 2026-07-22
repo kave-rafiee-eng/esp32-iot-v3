@@ -9,11 +9,10 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_system.h"
-#include "esp_wifi.h"
 #include "nvs_flash.h"
+#include "pcg_network.h"
 #include "pcg_rtr.h"
 #include "pcg_uart.h"
-#include "protocol_examples_common.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -70,6 +69,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
   switch ((esp_mqtt_event_id_t)event_id) {
   case MQTT_EVENT_CONNECTED:
     ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+    pcg_network_mqtt_set_connected(true);
 
     char topic[64];
     snprintf(topic, sizeof(topic), "%d/connect", deviceSerial);
@@ -89,6 +89,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     break;
   case MQTT_EVENT_DISCONNECTED:
     ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+    pcg_network_mqtt_set_connected(false);
     break;
 
   case MQTT_EVENT_SUBSCRIBED:
@@ -164,9 +165,10 @@ void app_main(void) {
     deviceSerial = pcg_read_serial_device();
     ESP_LOGE(TAG, "Device Serial: %d", deviceSerial);
   }
-  ESP_ERROR_CHECK(example_connect());
+  ESP_ERROR_CHECK(pcg_network_wifi_connect());
   ESP_ERROR_CHECK(mqtt_data_queue_init());
 
   esp_mqtt_client_handle_t client = mqtt_app_start();
+  ESP_ERROR_CHECK(pcg_network_monitor_start());
   ESP_ERROR_CHECK(pcgtask_start(client));
 }

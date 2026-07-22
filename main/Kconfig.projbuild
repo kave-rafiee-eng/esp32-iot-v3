@@ -29,4 +29,11 @@ menu "Example Configuration"
             GPIO number connected to RS485 transceiver DE/~RE pin.
             Used as UART RTS in half-duplex RS485 mode.
 
+    config PCG_NETWORK_MONITOR_INTERVAL_MS
+        int "Network status monitor interval (ms)"
+        default 1000
+        range 100 60000
+        help
+            How often the network monitor task polls WiFi/MQTT status.
+
 endmenu
