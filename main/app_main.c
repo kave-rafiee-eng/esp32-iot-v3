@@ -35,6 +35,7 @@
 
 #include "sdkconfig.h"
 
+#include "gpio_output.h"
 #include "pcg_device.h"
 
 static const char *TAG = "mqtt_example";
@@ -157,6 +158,7 @@ void app_main(void) {
   ESP_ERROR_CHECK(nvs_flash_init());
   ESP_ERROR_CHECK(esp_netif_init());
   ESP_ERROR_CHECK(esp_event_loop_create_default());
+  ESP_ERROR_CHECK(gpio_led_init());
 
   esp_err_t err = pcg_uart_init();
   if (err != ESP_OK) {

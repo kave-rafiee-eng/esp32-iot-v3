@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "gpio_output.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "pcg_network";
@@ -117,6 +118,12 @@ static void network_monitor_task(void *arg) {
                status.wifi_connected ? "connected" : "disconnected",
                status.mqtt_connected ? "connected" : "disconnected");
       prev = status;
+    }
+
+    if (status.wifi_connected && status.mqtt_connected) {
+      gpio_led_set(GPIO_LED_2, 1);
+    } else {
+      gpio_led_toggle(GPIO_LED_2);
     }
 
     vTaskDelay(pdMS_TO_TICKS(CONFIG_PCG_NETWORK_MONITOR_INTERVAL_MS));

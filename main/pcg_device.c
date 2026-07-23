@@ -6,12 +6,14 @@
 #include "freertos/task.h"
 
 #include "mqtt_data.h"
+#include "gpio_output.h"
 #include "pcg_protocol.h"
 #include "pcg_uart.h"
 
 static const char *TAG = "pcg_device";
 
 #define PCG_MQTT_RS485_DELAY_MS 20
+#define PCG_SERIAL_LED_BLINK_MS 500
 
 pcg_process_result_t pcg_device_handle(const pcg_device_frame_t *frame,
                                          const pcg_process_ctx_t *ctx) {
@@ -51,8 +53,15 @@ static bool pcg_device_frame_matches(const uint8_t *frame) {
 
 uint16_t pcg_read_serial_device(void) {
   uint8_t rx_buf[PCG_UART_RX_READ_SIZE];
+  TickType_t last_blink = xTaskGetTickCount();
 
   while (1) {
+    TickType_t now = xTaskGetTickCount();
+    if (now - last_blink >= pdMS_TO_TICKS(PCG_SERIAL_LED_BLINK_MS)) {
+      gpio_led_toggle(GPIO_LED_1);
+      last_blink = now;
+    }
+
     vTaskDelay(pdMS_TO_TICKS(PCG_DEVICE_POLL_MS));
 
     int len = uart_read_bytes(PCG_UART_NUM, rx_buf, sizeof(rx_buf), 0);
@@ -78,6 +87,7 @@ uint16_t pcg_read_serial_device(void) {
     uint8_t device_request = rx_buf[PCG_OFF_DEVICE_REQUEST];
 
     ESP_LOGI(TAG, "device id=0x%04X request=%u", device_id, device_request);
+    gpio_led_set(GPIO_LED_1, 1);
     return device_id;
   }
 }
