@@ -1,5 +1,17 @@
 menu "Example Configuration"
 
+    config EXAMPLE_WIFI_SSID
+        string "WiFi SSID"
+        default "kave"
+        help
+            SSID (network name) for station Wi-Fi connection.
+
+    config EXAMPLE_WIFI_PASSWORD
+        string "WiFi Password"
+        default "123456789"
+        help
+            WiFi password (WPA or WPA2). Can be blank if the network is open.
+
     config BROKER_URL_RAVIS
         string "Broker URL"
         default "mqtt://109.125.149.108:1883"
