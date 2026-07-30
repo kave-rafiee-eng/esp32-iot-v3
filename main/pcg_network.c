@@ -3,6 +3,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -105,6 +106,8 @@ static void network_monitor_task(void *arg) {
   (void)arg;
 
   pcg_network_status_t prev = {0};
+  const TickType_t reset_interval_ticks = pdMS_TO_TICKS(60 * 60 * 1000);
+  TickType_t task_start = xTaskGetTickCount();
 
   ESP_LOGI(TAG, "network monitor started");
 
@@ -124,6 +127,11 @@ static void network_monitor_task(void *arg) {
       gpio_led_set(GPIO_LED_2, 1);
     } else {
       gpio_led_toggle(GPIO_LED_2);
+    }
+
+    if ((xTaskGetTickCount() - task_start) >= reset_interval_ticks) {
+      ESP_LOGI(TAG, "hourly reset timer elapsed, restarting ESP");
+      esp_restart();
     }
 
     vTaskDelay(pdMS_TO_TICKS(CONFIG_PCG_NETWORK_MONITOR_INTERVAL_MS));
