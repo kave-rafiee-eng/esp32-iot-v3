@@ -29,4 +29,38 @@ menu "Example Configuration"
             GPIO number connected to RS485 transceiver DE/~RE pin.
             Used as UART RTS in half-duplex RS485 mode.
 
+    choice PCG_QUEUE_MODE
+        prompt "Pending frame release order"
+        default PCG_QUEUE_LIFO
+        help
+            Order used when a DIP SYNCK releases one MQTT frame onto the UART.
+
+        config PCG_QUEUE_LIFO
+            bool "LIFO (newest first)"
+        config PCG_QUEUE_FIFO
+            bool "FIFO (oldest first)"
+    endchoice
+
+    config PCG_QUEUE_DEPTH
+        int "Pending serial queue depth"
+        range 1 16
+        default 8
+        help
+            Maximum MQTT-to-Advance frames held until a DIP SYNCK.
+            A new frame is dropped when the queue is full.
+
+    config PCG_SYNCK_DELAY_MS
+        int "Delay after SYNCK before UART write (ms)"
+        range 0 1000
+        default 10
+        help
+            Wait after DIP SYNCK before writing one queued frame to the UART.
+
+    config PCG_RX_FLUSH_MS
+        int "UART RX coalesce delay (ms)"
+        range 0 500
+        default 40
+        help
+            Idle time to collect UART bytes before splitting PCG frames.
+
 endmenu

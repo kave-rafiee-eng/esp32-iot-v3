@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -14,7 +15,7 @@
 typedef struct {
     char topic[MQTT_TOPIC_MAX_LEN];
     int topic_len;
-    char data[MQTT_PAYLOAD_MAX_LEN];
+    uint8_t data[MQTT_PAYLOAD_MAX_LEN];
     int data_len;
 } mqtt_data_msg_t;
 

@@ -1,161 +1,81 @@
 #include "pcg_rtr.h"
 
-#include <stdlib.h>
+#include "pcg.h"
+
+#include <string.h>
 
 #include "driver/uart.h"
+#include "esp_random.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
-typedef enum {
-    def_PCG_ADD_ADVANCE = 1,
-    def_PCG_ADD_ESP32   = 2,
-    def_PCG_ADD_CLIENT  = 3,
-} def_PCG_ADD;
-
-typedef enum {
-    def_PCG_PORT_RTR = 1,
-} def_PCG_PORT;
-
-typedef enum {
-    def_PCG_RTR_MODE_READ  = 1,
-    def_PCG_RTR_MODE_WRITE = 2,
-} def_PCG_RTR_MODE;
-
-typedef enum {
-    RTR_PARSE_OK = 0,
-    RTR_PARSE_ERR_NULL_VALUE,
-    RTR_PARSE_ERR_WRONG_LEN,
-    RTR_PARSE_ERR_CRC,
-    RTR_PARSE_ERR_SENDER_ID,
-    RTR_PARSE_ERR_RECEIVER_ID,
-    RTR_PARSE_ERR_PORT,
-    RTR_PARSE_ERR_PID,
-    RTR_PARSE_ERR_MODE,
-    RTR_PARSE_ERR_REG_COUNT,
-    RTR_PARSE_ERR_ADDRESS,
-} rtr_parse_result_t;
-
-
+#define RTR_MODE_READ             1
+#define RTR_MODE_WRITE            2
 
 #define RTR_POLL_INTERVAL_MS      10
 #define RTR_RESEND_INTERVAL_MS    1000
 #define RTR_UART_RX_TOUT_SYMBOLS  3
 
-#define CRC_SIZE                  2
-#define PCG_HEADER_SIZE           3   /* sender_id, receiver_id, port */
-#define RTR_HEADER_SIZE           3   /* pid, mode, register_count */
-#define RTR_REGISTER_READ_SIZE    2   /* address only */
-#define RTR_REGISTER_WRITE_SIZE   4   /* address + value */
-
-#define RTR_READ_REQUEST_SIZE     (PCG_HEADER_SIZE + RTR_HEADER_SIZE + RTR_REGISTER_READ_SIZE + CRC_SIZE)
-#define RTR_READ_RESPONSE_SIZE    (PCG_HEADER_SIZE + RTR_HEADER_SIZE + RTR_REGISTER_WRITE_SIZE + CRC_SIZE)
-
-#define RTR_OFF_SENDER_ID         0
-#define RTR_OFF_RECEIVER_ID       1
-#define RTR_OFF_PORT              2
-#define RTR_OFF_PID               3
-#define RTR_OFF_MODE              4
-#define RTR_OFF_REG_COUNT         5
-#define RTR_OFF_ADDR_HI           6
-#define RTR_OFF_ADDR_LO           7
-#define RTR_OFF_VALUE_HI          8
-#define RTR_OFF_VALUE_LO          9
-
 static const char *TAG = "pcg_rtr";
 
-static void rtr_append_crc(uint8_t *buf, size_t payload_len)
+typedef struct {
+    uint16_t addr;
+    uint8_t pid;
+    uint16_t *value;
+    bool found;
+} rtr_wait_t;
+
+static bool rtr_take_write_value(const uint8_t *payload, size_t len,
+                                 uint16_t addr, uint16_t *value)
 {
-    uint16_t crc = CRC_16(buf, payload_len);
-    buf[payload_len]     = crc & 0xff;
-    buf[payload_len + 1] = (crc >> 8) & 0xff;
+    if (payload == NULL || value == NULL || len < 2) {
+        return false;
+    }
+    if (payload[0] != RTR_MODE_WRITE) {
+        return false;
+    }
+
+    uint8_t count = payload[1];
+    if (len != (size_t)(2 + count * 4)) {
+        return false;
+    }
+
+    for (uint8_t i = 0; i < count; i++) {
+        size_t off = 2 + (size_t)i * 4;
+        uint16_t got = ((uint16_t)payload[off] << 8) | payload[off + 1];
+        if (got == addr) {
+            *value = ((uint16_t)payload[off + 2] << 8) | payload[off + 3];
+            return true;
+        }
+    }
+
+    return false;
 }
 
-static size_t rtr_build_read_request(uint8_t *buf, uint16_t addr, uint8_t pid)
+static void rtr_on_frame(const uint8_t *frame, size_t len, void *ctx)
 {
-    buf[RTR_OFF_SENDER_ID]   = def_PCG_ADD_ESP32;
-    buf[RTR_OFF_RECEIVER_ID] = def_PCG_ADD_ADVANCE;
-    buf[RTR_OFF_PORT]        = def_PCG_PORT_RTR;
-    buf[RTR_OFF_PID]         = pid;
-    buf[RTR_OFF_MODE]        = def_PCG_RTR_MODE_READ;
-    buf[RTR_OFF_REG_COUNT]   = 1;
-    buf[RTR_OFF_ADDR_HI]     = (addr >> 8) & 0xff;
-    buf[RTR_OFF_ADDR_LO]     = addr & 0xff;
+    rtr_wait_t *wait = ctx;
+    pcg_packet_t pkt;
 
-    rtr_append_crc(buf, PCG_HEADER_SIZE + RTR_HEADER_SIZE + RTR_REGISTER_READ_SIZE);
-    return RTR_READ_REQUEST_SIZE;
-}
-
-static rtr_parse_result_t rtr_parse_read_response(const uint8_t *data, size_t len,
-                                                  uint16_t expected_addr, uint8_t expected_pid,
-                                                  uint16_t *value)
-{
-    if (value == NULL) {
-        ESP_LOGE(TAG, "parse: value pointer is NULL");
-        return RTR_PARSE_ERR_NULL_VALUE;
+    if (wait->found) {
+        return;
+    }
+    if (!pcg_parse(frame, len, &pkt)) {
+        return;
+    }
+    if (pkt.pid != wait->pid || pkt.receiver_port != PCG_PORT_RTR) {
+        return;
+    }
+    if (pkt.sender_type != PCG_PEER_ADVANCE) {
+        return;
+    }
+    if (!rtr_take_write_value(pkt.payload, pkt.payload_len, wait->addr, wait->value)) {
+        return;
     }
 
-    if (len != RTR_READ_RESPONSE_SIZE) {
-        ESP_LOGW(TAG, "parse: wrong length, got %u, expected %u", (unsigned)len, RTR_READ_RESPONSE_SIZE);
-        return RTR_PARSE_ERR_WRONG_LEN;
-    }
-
-    uint16_t rx_crc = data[len - 2] | (data[len - 1] << 8);
-    uint16_t calc_crc = CRC_16((uint8_t *)data, len - 2);
-    if (calc_crc != rx_crc) {
-        ESP_LOGW(TAG, "parse: CRC mismatch, rx=0x%04X calc=0x%04X", rx_crc, calc_crc);
-        ESP_LOG_BUFFER_HEX_LEVEL(TAG, data, len, ESP_LOG_WARN);
-        return RTR_PARSE_ERR_CRC;
-    }
-
-    uint8_t sender_id   = data[RTR_OFF_SENDER_ID];
-    uint8_t receiver_id = data[RTR_OFF_RECEIVER_ID];
-    uint8_t port        = data[RTR_OFF_PORT];
-    uint8_t pid         = data[RTR_OFF_PID];
-    uint8_t mode        = data[RTR_OFF_MODE];
-    uint8_t reg_count   = data[RTR_OFF_REG_COUNT];
-
-    if (sender_id != def_PCG_ADD_ADVANCE) {
-        ESP_LOGW(TAG, "parse: sender ID mismatch, got %u, expected %u",
-                 sender_id, def_PCG_ADD_ADVANCE);
-        return RTR_PARSE_ERR_SENDER_ID;
-    }
-
-    if (receiver_id != def_PCG_ADD_ESP32) {
-        ESP_LOGW(TAG, "parse: receiver ID mismatch, got %u, expected %u",
-                 receiver_id, def_PCG_ADD_ESP32);
-        return RTR_PARSE_ERR_RECEIVER_ID;
-    }
-
-    if (port != def_PCG_PORT_RTR) {
-        ESP_LOGW(TAG, "parse: port mismatch, got %u, expected %u", port, def_PCG_PORT_RTR);
-        return RTR_PARSE_ERR_PORT;
-    }
-
-    if (pid != expected_pid) {
-        ESP_LOGW(TAG, "parse: PID mismatch, got 0x%02X, expected 0x%02X", pid, expected_pid);
-        return RTR_PARSE_ERR_PID;
-    }
-
-    if (mode != def_PCG_RTR_MODE_WRITE) {
-        ESP_LOGW(TAG, "parse: mode mismatch, got %u, expected %u", mode, def_PCG_RTR_MODE_WRITE);
-        return RTR_PARSE_ERR_MODE;
-    }
-
-    if (reg_count != 1) {
-        ESP_LOGW(TAG, "parse: register count mismatch, got %u, expected 1", reg_count);
-        return RTR_PARSE_ERR_REG_COUNT;
-    }
-
-    uint16_t rx_addr = (data[RTR_OFF_ADDR_HI] << 8) | data[RTR_OFF_ADDR_LO];
-    if (rx_addr != expected_addr) {
-        ESP_LOGW(TAG, "parse: address mismatch, got 0x%04X, expected 0x%04X", rx_addr, expected_addr);
-        return RTR_PARSE_ERR_ADDRESS;
-    }
-
-    *value = (data[RTR_OFF_VALUE_HI] << 8) | data[RTR_OFF_VALUE_LO];
-    return RTR_PARSE_OK;
+    wait->found = true;
 }
 
 void rtr_uart_flush_rx(void)
@@ -205,12 +125,24 @@ bool rtrReadRegister(uint16_t add, uint16_t *value, uint32_t timeout_ms)
         return false;
     }
 
-    uint8_t tx_buf[RTR_READ_REQUEST_SIZE];
-    uint8_t rx_buf[PCG_UART_RX_READ_SIZE];
-    uint8_t pid = rand() & 0xff;
-    size_t tx_len = rtr_build_read_request(tx_buf, add, pid);
-    bool wait_forever = (timeout_ms == 0);
+    uint8_t payload[4] = {
+        RTR_MODE_READ,
+        1,
+        (uint8_t)((add >> 8) & 0xff),
+        (uint8_t)(add & 0xff),
+    };
+    uint8_t pid = (uint8_t)(esp_random() & 0xff);
+    uint8_t tx_buf[PCG_MIN_PACKET_SIZE + sizeof(payload)];
+    size_t tx_len = pcg_build(tx_buf, sizeof(tx_buf), pid,
+                              PCG_PEER_ESP32, 0,
+                              PCG_PEER_ADVANCE, PCG_PORT_RTR,
+                              payload, sizeof(payload));
+    if (tx_len == 0) {
+        ESP_LOGE(TAG, "read reg 0x%04X: failed to build request", add);
+        return false;
+    }
 
+    bool wait_forever = (timeout_ms == 0);
     ESP_LOGI(TAG, "read reg 0x%04X started, pid=0x%02X, timeout=%s",
              add, pid, wait_forever ? "infinite" : "limited");
 
@@ -220,6 +152,8 @@ bool rtrReadRegister(uint16_t add, uint16_t *value, uint32_t timeout_ms)
         return false;
     }
 
+    uint8_t acc[128];
+    size_t acc_len = 0;
     TickType_t start_tick = xTaskGetTickCount();
     TickType_t deadline = wait_forever ? 0 : start_tick + pdMS_TO_TICKS(timeout_ms);
     TickType_t next_resend = start_tick + pdMS_TO_TICKS(RTR_RESEND_INTERVAL_MS);
@@ -238,15 +172,27 @@ bool rtrReadRegister(uint16_t add, uint16_t *value, uint32_t timeout_ms)
 
         vTaskDelay(pdMS_TO_TICKS(RTR_POLL_INTERVAL_MS));
 
-        int len = uart_read_bytes(PCG_UART_NUM, rx_buf, sizeof(rx_buf), 0);
+        uint8_t rx_tmp[64];
+        int len = uart_read_bytes(PCG_UART_NUM, rx_tmp, sizeof(rx_tmp), 0);
         if (len <= 0) {
             continue;
         }
 
-        ESP_LOGD(TAG, "read reg 0x%04X: received %d bytes", add, len);
+        if (acc_len + (size_t)len > sizeof(acc)) {
+            ESP_LOGW(TAG, "read reg 0x%04X: RX accumulator overflow, resetting", add);
+            acc_len = 0;
+        }
+        memcpy(acc + acc_len, rx_tmp, (size_t)len);
+        acc_len += (size_t)len;
 
-        rtr_parse_result_t result = rtr_parse_read_response(rx_buf, (size_t)len, add, pid, value);
-        if (result == RTR_PARSE_OK) {
+        rtr_wait_t wait = {
+            .addr = add,
+            .pid = pid,
+            .value = value,
+            .found = false,
+        };
+        pcg_split_frames(acc, acc_len, rtr_on_frame, &wait, NULL);
+        if (wait.found) {
             ESP_LOGI(TAG, "read reg 0x%04X success, value=0x%04X (%u)", add, *value, *value);
             return true;
         }
@@ -302,24 +248,4 @@ esp_err_t pcg_uart_init(void)
              PCG_UART_NUM, PCG_UART_BAUD_RATE, CONFIG_PCG_UART_TX_PIN, CONFIG_PCG_UART_RX_PIN,
              CONFIG_GPIO_OUTPUT_PIN);
     return ESP_OK;
-}
-
-unsigned int CRC_16(uint8_t *buf, int len)
-{
-    unsigned int crc = 0xFFFF;
-
-    for (int pos = 0; pos < len; pos++) {
-        crc ^= (unsigned int)buf[pos];
-
-        for (int i = 8; i != 0; i--) {
-            if ((crc & 0x0001) != 0) {
-                crc >>= 1;
-                crc ^= 0xA001;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-
-    return crc;
 }

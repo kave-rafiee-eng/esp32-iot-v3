@@ -67,20 +67,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
 
         char topic[64];
-        snprintf(topic, sizeof(topic), "%d/connect", deviceSerial);
-
-        msg_id = esp_mqtt_client_publish(client, topic, "connected.", 0, 1, 0);
-        ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
-
-        snprintf(topic, sizeof(topic), "%d/pub", deviceSerial);
+        snprintf(topic, sizeof(topic), "%u/pub", (unsigned)deviceSerial);
         msg_id = esp_mqtt_client_subscribe(client, topic, 0);
         ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-        // msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
-        // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-        // msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
-        // ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
         break;
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
@@ -153,8 +142,8 @@ void app_main(void)
         ESP_LOGE(TAG, "UART init failed: %s", esp_err_to_name(err));
     }
     else{
-        if( rtrReadRegister(10100, &deviceSerial, 0) == true ){
-            ESP_LOGE(TAG,"serial : %d",deviceSerial);
+        if (rtrReadRegister(PCG_RTR_DEVICE_SERIAL, &deviceSerial, 0)) {
+            ESP_LOGI(TAG, "serial : %u", (unsigned)deviceSerial);
         }
         
     }
