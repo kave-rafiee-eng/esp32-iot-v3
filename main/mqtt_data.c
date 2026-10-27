@@ -47,13 +47,17 @@ bool mqtt_data_enqueue(esp_mqtt_event_handle_t event)
     memcpy(msg.topic, event->topic, msg.topic_len);
     msg.topic[msg.topic_len] = '\0';
 
-    if (event->data_len > 0 && event->data != NULL) {
-        msg.data_len = event->data_len;
-        if (msg.data_len >= MQTT_PAYLOAD_MAX_LEN) {
-            msg.data_len = MQTT_PAYLOAD_MAX_LEN - 1;
+    if (event->data_len < 0 || event->data_len > MQTT_PAYLOAD_MAX_LEN) {
+        ESP_LOGW(TAG, "payload length %d rejected", event->data_len);
+        return false;
+    }
+
+    if (event->data_len > 0) {
+        if (event->data == NULL) {
+            return false;
         }
-        memcpy(msg.data, event->data, msg.data_len);
-        msg.data[msg.data_len] = '\0';
+        msg.data_len = event->data_len;
+        memcpy(msg.data, event->data, (size_t)msg.data_len);
     }
 
     if (xQueueSend(s_mqtt_data_queue, &msg, 0) != pdTRUE) {
