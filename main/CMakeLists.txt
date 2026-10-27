@@ -1,3 +1,28 @@
-idf_component_register(SRCS "fwu.c" "pcg.c" "pcg_rtr.c" "app_main.c" "mqtt_data.c" "pcgtask.c" "gpio_output.c"
-                    INCLUDE_DIRS "."
-                    REQUIRES driver mqtt esp_wifi esp_netif esp_event nvs_flash protocol_examples_common esp_partition)
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "mqtt/mqtt_data.c"
+        "gateway/pcgtask.c"
+        "pcg/pcg.c"
+        "pcg/pcg_rtr.c"
+        "pcg/pcg_dip.c"
+        "fwu/fwu.c"
+        "fwu/fwu_handle.c"
+        "gpio/gpio_output.c"
+    INCLUDE_DIRS
+        "."
+        "mqtt"
+        "gateway"
+        "pcg"
+        "fwu"
+        "gpio"
+    REQUIRES
+        driver
+        mqtt
+        esp_wifi
+        esp_netif
+        esp_event
+        nvs_flash
+        protocol_examples_common
+        esp_partition
+)

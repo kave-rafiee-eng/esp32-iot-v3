@@ -10,38 +10,34 @@
 #include "sdkconfig.h"
 
 #include "fwu.h"
+#include "fwu_handle.h"
 #include "mqtt_data.h"
 #include "pcg.h"
+#include "pcg_dip.h"
 #include "pcg_rtr.h"
 
+/* Log tag for this gateway task. */
 static const char *TAG = "pcgtask";
 
+/* Coalesce buffer size for UART RX bytes before frame split. */
 #define PCG_RX_ACC_SIZE 2048
-#define DIP_PAYLOAD_SIZE 3
-#define DIP_CMD_SYNCK_REQUEST 1
 
+/* Device serial used in MQTT topics; defined elsewhere. */
 extern uint16_t deviceSerial;
 
+/* Shared MQTT client handle for publishes from this task. */
 static esp_mqtt_client_handle_t s_client;
-static bool s_synck_busy;
-static bool s_synck_armed;
-static uint8_t s_release[MQTT_PAYLOAD_MAX_LEN];
-static size_t s_release_len;
-static bool s_release_valid;
 
-typedef struct {
-    uint8_t data[MQTT_PAYLOAD_MAX_LEN];
-    uint16_t len;
-} pending_slot_t;
-
-static pending_slot_t s_pending[CONFIG_PCG_QUEUE_DEPTH];
-static int s_pending_count;
-
+/* Accumulator for coalescing UART RX bytes into a parseable chunk. */
 static uint8_t s_rx_acc[PCG_RX_ACC_SIZE];
+/* Current number of bytes stored in s_rx_acc. */
 static size_t s_rx_len;
+/* Bytes in s_rx_acc already processed by the last rx_flush. */
 static size_t s_rx_scanned;
+/* Tick of the last byte appended to s_rx_acc (idle-flush timer). */
 static TickType_t s_rx_last;
 
+/* Map a PCG peer type to its MQTT topic suffix, or NULL if unknown. */
 static const char *mqtt_suffix(uint8_t peer)
 {
     switch (peer) {
@@ -56,6 +52,7 @@ static const char *mqtt_suffix(uint8_t peer)
     }
 }
 
+/* Publish a raw PCG frame to "{deviceSerial}/{suffix}". */
 static void mqtt_publish_frame(const char *suffix, const uint8_t *frame, size_t len)
 {
     char topic[64];
@@ -69,129 +66,33 @@ static void mqtt_publish_frame(const char *suffix, const uint8_t *frame, size_t 
     ESP_LOGI(TAG, "publish %s len=%u msg_id=%d", topic, (unsigned)len, msg_id);
 }
 
-static bool pending_push(const uint8_t *data, size_t len)
+/* FWU MQTT reply callback: peer type -> topic suffix -> publish. */
+static void fwu_mqtt_publish(uint8_t peer, const uint8_t *frame, size_t len, void *ctx)
 {
-    if (data == NULL || len == 0 || len > MQTT_PAYLOAD_MAX_LEN) {
-        ESP_LOGW(TAG, "pending frame dropped, len=%u", (unsigned)len);
-        return false;
-    }
-    if (s_pending_count >= CONFIG_PCG_QUEUE_DEPTH) {
-        ESP_LOGW(TAG, "pending queue full, dropping frame");
-        return false;
-    }
-
-    pending_slot_t *slot = &s_pending[s_pending_count];
-    memcpy(slot->data, data, len);
-    slot->len = (uint16_t)len;
-    s_pending_count++;
-    return true;
-}
-
-static bool pending_pop(uint8_t *out, size_t out_cap, size_t *out_len)
-{
-    if (s_pending_count <= 0) {
-        return false;
-    }
-
-#if CONFIG_PCG_QUEUE_FIFO
-    pending_slot_t *slot = &s_pending[0];
-#else
-    pending_slot_t *slot = &s_pending[s_pending_count - 1];
-#endif
-
-    if (slot->len > out_cap) {
-        return false;
-    }
-
-    memcpy(out, slot->data, slot->len);
-    *out_len = slot->len;
-
-#if CONFIG_PCG_QUEUE_FIFO
-    s_pending_count--;
-    if (s_pending_count > 0) {
-        memmove(&s_pending[0], &s_pending[1], (size_t)s_pending_count * sizeof(s_pending[0]));
-    }
-#else
-    s_pending_count--;
-#endif
-    return true;
-}
-
-static void handle_dip(const uint8_t *payload, size_t len)
-{
-    if (len != DIP_PAYLOAD_SIZE) {
-        ESP_LOGW(TAG, "DIP rejected, len=%u", (unsigned)len);
-        return;
-    }
-
-    uint16_t serial = ((uint16_t)payload[0] << 8) | payload[1];
-    uint8_t command = payload[2];
-    if (command != DIP_CMD_SYNCK_REQUEST) {
-        ESP_LOGW(TAG, "DIP command ignored: %u", command);
-        return;
-    }
-    if (s_synck_busy) {
-        return;
-    }
-
-    s_release_valid = pending_pop(s_release, sizeof(s_release), &s_release_len);
-    ESP_LOGI(TAG, "SYNCK serial=%u queued=%d", (unsigned)serial, s_pending_count);
-    if (!s_release_valid) {
-        return;
-    }
-
-    /* Hold the line until this chunk is finished so a second SYNCK is ignored. */
-    s_synck_busy = true;
-    s_synck_armed = true;
-}
-
-static void handle_fwu(const pcg_packet_t *pkt)
-{
-    uint8_t payload[FWU_WRITE_SIZE];
-    size_t payload_len = 0;
-
-    if (!fwu_build_reply(pkt->payload, pkt->payload_len, payload, sizeof(payload), &payload_len)) {
-        ESP_LOGW(TAG, "FWU rejected, pid=%u", pkt->pid);
-        return;
-    }
-
-    uint8_t frame[PCG_HEADER_SIZE + FWU_WRITE_SIZE + PCG_CRC_SIZE];
-    size_t frame_len = pcg_build(frame, sizeof(frame),
-                                 pkt->pid, PCG_PEER_ESP32, 0,
-                                 pkt->sender_type, PCG_PORT_FWU,
-                                 payload, payload_len);
-    if (frame_len == 0) {
-        ESP_LOGE(TAG, "FWU reply build failed");
-        return;
-    }
-
-    if (pkt->sender_type == PCG_PEER_ADVANCE) {
-        ESP_LOGI(TAG, "FWU reply -> serial, len=%u", (unsigned)frame_len);
-        rtr_rs485_send(frame, frame_len);
-        return;
-    }
-
-    const char *suffix = mqtt_suffix(pkt->sender_type);
+    (void)ctx;
+    const char *suffix = mqtt_suffix(peer);
     if (suffix == NULL) {
-        ESP_LOGW(TAG, "FWU cannot reply to sender %u", pkt->sender_type);
+        ESP_LOGW(TAG, "FWU cannot reply to sender %u", peer);
         return;
     }
-    mqtt_publish_frame(suffix, frame, frame_len);
+    mqtt_publish_frame(suffix, frame, len);
 }
 
+/* Dispatch a frame addressed to the ESP32 by receiver port (DIP / FWU). */
 static void handle_esp32(const pcg_packet_t *pkt)
 {
     if (pkt->receiver_port == PCG_PORT_DIP) {
-        handle_dip(pkt->payload, pkt->payload_len);
+        pcg_dip_handle(pkt->payload, pkt->payload_len);
         return;
     }
     if (pkt->receiver_port == PCG_PORT_FWU) {
-        handle_fwu(pkt);
+        fwu_handle_packet(pkt, fwu_mqtt_publish, NULL);
         return;
     }
     ESP_LOGW(TAG, "ESP32 unhandled port %u", pkt->receiver_port);
 }
 
+/* Callback for each complete PCG frame split from the UART coalesce buffer. */
 static void on_serial_frame(const uint8_t *frame, size_t len, void *ctx)
 {
     pcg_packet_t pkt;
@@ -220,6 +121,7 @@ static void on_serial_frame(const uint8_t *frame, size_t len, void *ctx)
     ESP_LOGW(TAG, "serial destination ignored: %u", pkt.receiver_type);
 }
 
+/* Route an inbound MQTT payload: queue for Advance, or handle locally. */
 static void handle_from_mqtt(const uint8_t *data, size_t len)
 {
     pcg_packet_t pkt;
@@ -233,9 +135,7 @@ static void handle_from_mqtt(const uint8_t *data, size_t len)
         return;
     }
     if (pkt.receiver_type == PCG_PEER_ADVANCE) {
-        if (pending_push(data, len)) {
-            ESP_LOGI(TAG, "mqtt -> pending queue (%d)", s_pending_count);
-        }
+        pcg_dip_queue_push(data, len);
         return;
     }
     if (pkt.receiver_type == PCG_PEER_ESP32) {
@@ -247,34 +147,7 @@ static void handle_from_mqtt(const uint8_t *data, size_t len)
     ESP_LOGW(TAG, "mqtt destination ignored: %u", pkt.receiver_type);
 }
 
-static void rx_append(const uint8_t *data, int len);
-
-static void release_armed_synck(void)
-{
-    uint8_t tmp[PCG_UART_RX_READ_SIZE];
-    int n;
-
-    if (!s_synck_armed) {
-        return;
-    }
-    s_synck_armed = false;
-
-    if (s_release_valid) {
-        if (CONFIG_PCG_SYNCK_DELAY_MS > 0) {
-            vTaskDelay(pdMS_TO_TICKS(CONFIG_PCG_SYNCK_DELAY_MS));
-        }
-        if (rtr_rs485_send(s_release, s_release_len) != ESP_OK) {
-            ESP_LOGE(TAG, "SYNCK serial write failed");
-        }
-        s_release_valid = false;
-    }
-
-    while ((n = uart_read_bytes(PCG_UART_NUM, tmp, sizeof(tmp), 0)) > 0) {
-        rx_append(tmp, n);
-    }
-    s_synck_busy = false;
-}
-
+/* Split coalesced UART bytes into PCG frames and keep any incomplete tail. */
 static void rx_flush(void)
 {
     size_t len;
@@ -304,6 +177,7 @@ static void rx_flush(void)
     s_rx_scanned = s_rx_len;
 }
 
+/* Append UART bytes to s_rx_acc; flush early if the buffer is full. */
 static void rx_append(const uint8_t *data, int len)
 {
     size_t left = (size_t)len;
@@ -337,6 +211,7 @@ static void rx_append(const uint8_t *data, int len)
     }
 }
 
+/* Main gateway loop: MQTT queue, UART coalesce/flush, and SYNCK release. */
 static void pcgtask(void *arg)
 {
     QueueHandle_t data_queue = mqtt_data_queue_get();
@@ -375,12 +250,13 @@ static void pcgtask(void *arg)
             rx_flush();
         }
 
-        if (s_synck_armed) {
-            release_armed_synck();
+        if (pcg_dip_armed()) {
+            pcg_dip_release(rx_append);
         }
     }
 }
 
+/* Init FWU storage and start the gateway task pinned to core 1. */
 esp_err_t pcgtask_start(esp_mqtt_client_handle_t client)
 {
     if (fwu_init() != ESP_OK) {
