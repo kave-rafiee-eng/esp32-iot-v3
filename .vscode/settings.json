@@ -14,5 +14,6 @@
     "--compile-commands-dir=c:\\Users\\kave\\Desktop\\iot-version3\\esp32-iot3\\esp32-iot-v3\\build"
   ],
   "idf.flashType": "UART",
-  "idf.monitorPort": "COM5"
+  "idf.monitorPort": "COM15",
+  "idf.port": "COM15"
 }

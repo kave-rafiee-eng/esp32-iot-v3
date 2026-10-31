@@ -9,6 +9,7 @@ idf_component_register(
         "fwu/fwu.c"
         "fwu/fwu_handle.c"
         "gpio/gpio_output.c"
+        "network/pcg_network.c"
     INCLUDE_DIRS
         "."
         "mqtt"
@@ -16,6 +17,7 @@ idf_component_register(
         "pcg"
         "fwu"
         "gpio"
+        "network"
     REQUIRES
         driver
         mqtt

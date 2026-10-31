@@ -30,18 +30,22 @@ esp_err_t fwu_init(void)
 
 static bool fwu_map(const uint8_t *addr, uint32_t *offset, bool need_sector)
 {
-    uint32_t off = (uint32_t)addr[0]
-                 | ((uint32_t)addr[1] << 8)
-                 | ((uint32_t)addr[2] << 16)
-                 | ((uint32_t)addr[3] << 24);
+    /* Address is a block index (LE), matching userpanel blockAddress(). */
+    uint32_t block = (uint32_t)addr[0]
+                   | ((uint32_t)addr[1] << 8)
+                   | ((uint32_t)addr[2] << 16)
+                   | ((uint32_t)addr[3] << 24);
 
-    if ((off % FWU_DATA_SIZE) != 0) {
-        ESP_LOGW(TAG, "offset 0x%08lx is not 256-byte aligned", (unsigned long)off);
+    if (block > (UINT32_MAX / FWU_DATA_SIZE)) {
+        ESP_LOGW(TAG, "block %lu overflow", (unsigned long)block);
         return false;
     }
 
+    uint32_t off = block * FWU_DATA_SIZE;
+
     if (s_part == NULL || (uint64_t)off + FWU_DATA_SIZE > s_part->size) {
-        ESP_LOGW(TAG, "offset 0x%08lx outside partition", (unsigned long)off);
+        ESP_LOGW(TAG, "block %lu offset 0x%08lx outside partition",
+                 (unsigned long)block, (unsigned long)off);
         return false;
     }
 

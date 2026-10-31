@@ -75,4 +75,13 @@ menu "Example Configuration"
         help
             Idle time to collect UART bytes before splitting PCG frames.
 
+    config PCG_NETWORK_MONITOR_INTERVAL_MS
+        int "Network monitor interval (ms)"
+        range 50 10000
+        default 100
+        help
+            How often the network monitor refreshes the status LEDs.
+            Values above 100 ms are capped so the blink patterns stay visible.
+            The ESP restarts after one hour.
+
 endmenu
